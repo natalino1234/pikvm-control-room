@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' http://127.0.0.1:* data:; media-src 'self' blob:; connect-src ws://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>PiKVM Control Room</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="media.css">
+  <link rel="stylesheet" href="fullscreen.css">
+  <link rel="stylesheet" href="captions.css">
+</head>
+<body>
+  <div id="rdp-edge" aria-hidden="true"></div>
+  <nav id="rdp-toolbar" aria-label="Controles da tela cheia"></nav>
+  <header id="header"></header>
+  <div id="global-mic-bar" class="global-mic-bar"></div>
+  <div class="shell"><aside id="sidebar"></aside><main id="main"></main><aside id="controls"></aside></div>
+  <footer id="footer"></footer>
+  <div id="toast" role="status"></div>
+  <dialog id="dialog"></dialog>
+  <script src="geometry.js"></script>
+  <script src="video.js"></script>
+  <script src="captions.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
