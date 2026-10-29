@@ -1,0 +1,47 @@
+{
+  "name": "pikvm-control-room",
+  "version": "0.4.1",
+  "description": "Central desktop para múltiplos PiKVMs e monitores",
+  "main": "electron/main.cjs",
+  "author": "natalino1234",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test tests/*.test.cjs",
+    "test:ui": "node tests/smoke.cjs",
+    "build": "electron-builder --win portable --x64",
+    "test:captions": "node tests/transcription-smoke.cjs"
+  },
+  "dependencies": {
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "electron": "45.0.0",
+    "electron-builder": "26.15.3",
+    "playwright": "1.64.1"
+  },
+  "build": {
+    "appId": "local.pikvm.controlroom",
+    "productName": "PiKVM Control Room",
+    "compression": "normal",
+    "files": [
+      "electron/**/*",
+      "ui/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "portable"
+    },
+    "directories": {
+      "output": "dist"
+    }
+  },
+  "homepage": "https://github.com/natalino1234/pikvm-control-room#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/natalino1234/pikvm-control-room.git"
+  },
+  "bugs": {
+    "url": "https://github.com/natalino1234/pikvm-control-room/issues"
+  }
+}
