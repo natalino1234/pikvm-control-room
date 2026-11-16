@@ -17,7 +17,7 @@ O aplicativo integra diretamente a API do PiKVM e não incorpora uma página de 
 
 ## Download
 
-[Baixar PiKVM Control Room 0.4.4 para Windows x64](https://github.com/natalino1234/pikvm-control-room/releases/download/v0.4.4/PiKVM-Control-Room-0.4.4.exe) · [Versões publicadas](https://github.com/natalino1234/pikvm-control-room/releases)
+[Baixar a versão mais recente para Windows x64](https://github.com/natalino1234/pikvm-control-room/releases/latest) · [Versões publicadas](https://github.com/natalino1234/pikvm-control-room/releases)
 
 Extraia o código apenas se precisar compilar. O executável portátil pode ser aberto diretamente.
 
