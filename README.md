@@ -59,6 +59,8 @@ O executável é criado em `dist/` e não exige Node.js no computador de destino
 
 Em **Central → Teclado e Mouse → Velocidade da rolagem**, ajuste a rolagem vertical e horizontal de 1 a 10 para o PiKVM selecionado. O ajuste é salvo automaticamente por equipamento; 5 é o padrão. O selo **CONTROLE ATIVO** fica no canto superior direito da transmissão.
 
+Em **Esta janela → Outros monitores e janelas**, clique em **Espelhar** para acompanhar a divisão, a aba ativa e a área ampliada de outra janela. Mudar de aba, ajustar a divisão ou trocar o equipamento de uma área no espelho altera a janela de origem também. Na tela cheia, abra **Monitores** na barra do topo. Use **Voltar à minha janela** para sair do espelho; se a janela de origem fechar, a sua tela volta automaticamente.
+
 O áudio continua nas abas de fundo. Uma sessão por equipamento evita reprodução duplicada quando o mesmo PiKVM aparece em mais de uma área. A borda âmbar indica atividade sonora. O microfone pode ser mutado individualmente na central ou em conjunto com Ctrl+Shift+M.
 
 Novos equipamentos atribuídos ao workspace podem usar o microfone padrão conforme as preferências salvas. Verifique os indicadores MIC e MIC MUDO para acompanhar o envio de voz. A captura do microfone permanece conectada durante o mute, mas transmite silêncio.

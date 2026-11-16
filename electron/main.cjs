@@ -32,7 +32,7 @@ function device(id) {
   else if (d.defaultPassword) password = 'admin';
   return { ...d, password };
 }
-function publicState() { return { devices: state.devices.map(({ secret, defaultPassword, ...d }) => ({ ...d, hasPassword: !!(secret || defaultPassword) })), transcription:transcription?.snapshot(), windows: state.windows, selected, audioFocus, microphones:microphoneStatus(state.devices),mediaReports:[...mediaReports.values()],audioReports:[...audioReports.values()],audioLevels:[...audioLevels.values()] }; }
+function publicState() { return { devices: state.devices.map(({ secret, defaultPassword, ...d }) => ({ ...d, hasPassword: !!(secret || defaultPassword) })), transcription:transcription?.snapshot(), windows: state.windows, workspaceViews:workspaceViews(), selected, audioFocus, microphones:microphoneStatus(state.devices),mediaReports:[...mediaReports.values()],audioReports:[...audioReports.values()],audioLevels:[...audioLevels.values()] }; }
 function broadcast(channel, value) { for (const w of windows.values()) if (!w.isDestroyed()) w.webContents.send(channel, value); }
 function changed() { save(); broadcast('state', publicState()); }
 function toggleAllMicrophones(sender){if(sender)release(sender);const result=toggleMicrophones(state.devices);changed();return result;}
@@ -50,6 +50,20 @@ function release(sender) {
   held.delete(sender);
 }
 function displays() { return screen.getAllDisplays().map((d, i) => ({ id: d.id, name: d.label || `Monitor ${i + 1}`, bounds: d.bounds, primary: d.id === screen.getPrimaryDisplay().id })); }
+function workspaceViews() {
+  return state.windows.flatMap(({id})=>{
+    const w=windows.get(id);
+    return w&&!w.isDestroyed()?[{id,displayId:screen.getDisplayMatching(w.getBounds()).id,focusedSlot:w.focusedSlot??null,mirrorId:w.mirrorId??null}]:[];
+  });
+}
+function updateWorkspaceViews(){broadcast('workspace-views',workspaceViews());}
+function workspaceTarget(e,id) {
+  const source=BrowserWindow.fromWebContents(e.sender);
+  if(!state.windows.some(w=>w.id===source.roomId)|| (id!==source.roomId&&id!==source.mirrorId))throw Error('Janela de vídeo não autorizada.');
+  const config=state.windows.find(w=>w.id===id),win=windows.get(id);
+  if(!config||!win||win.isDestroyed())throw Error('A janela selecionada foi fechada.');
+  return {config,win};
+}
 function openWindow(config, central = false, audioHub=false) {
   const monitor = screen.getAllDisplays().find(d => d.id === config.displayId) || screen.getPrimaryDisplay();
   const b = monitor.workArea;
@@ -70,7 +84,13 @@ function openWindow(config, central = false, audioHub=false) {
   w.loadFile(path.join(__dirname, audioHub?'../ui/audio.html':'../ui/index.html'), { query: { window: config.id, central: central ? '1' : '0' } });
   let microphoneShortcutHeld=false;
   w.on('blur', () => {microphoneShortcutHeld=false;release(w.webContents.id);});
-  w.on('closed', () => { subscribers.delete(senderId); release(senderId); clearMedia(config.id); for(const media of mediaListeners)media.close(); windows.delete(config.id); syncConnections();if(!audioHub&&[...windows.keys()].every(id=>id==='audio-hub'))app.quit(); });
+  w.on('closed', () => {
+    subscribers.delete(senderId);release(senderId);clearMedia(config.id);
+    for(const media of mediaListeners)media.close();
+    windows.delete(config.id);syncConnections();
+    if(!central&&!audioHub){for(const peer of windows.values())if(peer.mirrorId===config.id)peer.mirrorId=null;updateWorkspaceViews();}
+    if(!audioHub&&[...windows.keys()].every(id=>id==='audio-hub'))app.quit();
+  });
   w.webContents.on('before-input-event', (event, input) => {
     if((input.code==='KeyM'||input.key?.toLowerCase()==='m')&&(microphoneShortcutHeld||(input.type==='keyDown'&&input.control&&input.shift&&!input.alt&&!input.meta))){
       event.preventDefault();
@@ -85,6 +105,11 @@ function openWindow(config, central = false, audioHub=false) {
   if (!central&&!audioHub) { if (config.fullscreen) w.setFullScreen(true); else w.maximize(); }
   const full = () => { if (!central) { config.fullscreen = w.isFullScreen(); changed(); } w.webContents.send('fullscreen', w.isFullScreen()); };
   w.on('enter-full-screen', full); w.on('leave-full-screen', full);
+  if(!central&&!audioHub){
+    let displayId=screen.getDisplayMatching(w.getBounds()).id;
+    w.on('move',()=>{const next=screen.getDisplayMatching(w.getBounds()).id;if(next!==displayId){displayId=next;updateWorkspaceViews();}});
+    updateWorkspaceViews();
+  }
   return w;
 }
 function checkedSender(event) {
@@ -105,15 +130,38 @@ function register() {
   handle('delete-device', (_e, id) => {
     if(transcription.meetings.has(id))throw Error('Encerre a reunião antes de remover esta conexão.');
     state.devices = state.devices.filter(d => d.id !== id);
-    for (const win of state.windows) for (const tab of win.tabs) tab.slots = tab.slots.map(s => s === id ? null : s);
+    for (const config of state.windows) {
+      for(const tab of config.tabs)tab.slots=tab.slots.map(s=>s===id?null:s);
+      const win=windows.get(config.id);
+      if(win?.focusedSlot!=null&&!config.tabs.find(t=>t.id===config.activeTab)?.slots[win.focusedSlot])win.focusedSlot=null;
+    }
     if (selected === id) selected = null;
     connections.get(id)?.stop(); connections.delete(id); changed();
   });
   handle('save-window', (e, data) => {
-    const w = state.windows.find(w => w.id === BrowserWindow.fromWebContents(e.sender).roomId);
-    if (!w) throw new Error('Use uma janela de vídeo para editar as abas.');
+    const {config:w,win}=workspaceTarget(e,data.windowId??BrowserWindow.fromWebContents(e.sender).roomId);
     if (!Array.isArray(data.tabs) || !data.tabs.length || data.tabs.length > 30) throw new Error('Crie entre 1 e 30 abas.');
-    w.tabs = data.tabs.map(t => model.validateTab(t, state.devices)); w.activeTab = w.tabs.some(t => t.id === data.activeTab) ? data.activeTab : w.tabs[0].id; changed();
+    const previous=w.tabs.find(t=>t.id===w.activeTab);
+    w.tabs = data.tabs.map(t => model.validateTab(t, state.devices)); w.activeTab = w.tabs.some(t => t.id === data.activeTab) ? data.activeTab : w.tabs[0].id;
+    const active=w.tabs.find(t=>t.id===w.activeTab);
+    if(win.focusedSlot!=null&&(data.resetFocus||previous?.id!==active.id||previous?.layout!==active.layout||!active.slots[win.focusedSlot])){
+      win.focusedSlot=null;
+    }
+    changed();
+  });
+  handle('mirror-window',(e,id)=>{
+    const owner=BrowserWindow.fromWebContents(e.sender).roomId,{win}=workspaceTarget(e,owner);
+    if(id!==null){
+      const target=windows.get(id);
+      if(id===owner||!state.windows.some(w=>w.id===id)||!target||target.isDestroyed()||target.mirrorId)throw Error('Esta janela não está disponível para espelhar.');
+      for(const peer of windows.values())if(peer.mirrorId===owner)peer.mirrorId=null;
+    }
+    win.mirrorId=id;updateWorkspaceViews();
+  });
+  handle('workspace-focus',(e,id,slot)=>{
+    const {config,win}=workspaceTarget(e,id),t=config.tabs.find(tab=>tab.id===config.activeTab)||config.tabs[0];
+    if(slot!==null&&(!model.isSlot(slot)||slot>=t.layout||!t.slots[slot]))throw Error('Área inválida.');
+    win.focusedSlot=slot;updateWorkspaceViews();
   });
   handle('select', (e, id, slot=0) => { selected = state.devices.some(d => d.id === id) ? id : null;const owner=BrowserWindow.fromWebContents(e.sender).roomId;if(owner!=='central'){audioFocus={owner,slot,id:selected};broadcast('audio-focus',audioFocus);}broadcast('selection', selected); });
   handle('media-settings', (_e,id,settings)=>{
@@ -242,7 +290,8 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionCheckHandler((contents,permission,_origin,details)=>permission==='media'&&trustedMic(contents)&&details.mediaType!=='video');
   for (const w of state.windows) openWindow(w);
   openWindow({id:'audio-hub'},false,true);
-  screen.on('display-added', () => broadcast('displays', displays())); screen.on('display-removed', () => broadcast('displays', displays()));
+  const syncDisplays=()=>{broadcast('displays',displays());updateWorkspaceViews();};
+  for(const event of ['display-added','display-removed','display-metrics-changed'])screen.on(event,syncDisplays);
 });
 app.on('window-all-closed', () => app.quit());
 let finishingQuit=false;

@@ -198,8 +198,49 @@ async function main() {
       await second.waitForSelector('.grid');
       const ports=await Promise.all([page.evaluate(()=>new URL(document.querySelector('.video img').src).port),second.evaluate(async()=>new URL((await window.room.call('boot')).mediaBase).port)]);
       assert.notEqual(ports[0],ports[1]);
+      const sourceId=await second.evaluate(async id=>{
+        const w=currentWindow(),first=activeTab();
+        first.name='Operação';first.layout=2;first.slots[0]='test-device';first.slots[1]=id;
+        w.tabs.push({id:'source-extra',name:'Plantão',layout:4,slots:[id],fit:'contain'});
+        await window.room.call('save-window',{tabs:w.tabs,activeTab:w.activeTab});return w.id;
+      },secondId);
+      await page.bringToFront();
+      const mirrorButton=page.locator('#sidebar [data-action="mirror-window"]');
+      await mirrorButton.waitFor({state:'attached'});
+      assert.equal(await mirrorButton.getAttribute('data-id'),sourceId);
+      const before=await page.evaluate(()=>({id:activeTab().id,layout:activeTab().layout,slots:activeTab().slots}));
+      await page.evaluate(async id=>{
+        const w=state.windows.find(w=>w.id===id);
+        try{await window.room.call('save-window',{windowId:id,tabs:w.tabs,activeTab:w.activeTab});}catch{return;}
+        throw Error('Uma janela não espelhada não deve aceitar alterações remotas.');
+      },sourceId);
+      await page.locator('header [data-action="monitors"]').click();
+      await page.locator('#dialog [data-action="mirror-window"]').click();
+      await page.waitForFunction(()=>document.querySelector('.workspace-heading h1')?.textContent.startsWith('Espelhando'));
+      await page.waitForFunction(()=>document.querySelectorAll('.tile').length===2&&document.querySelectorAll('.video[data-status="playing"]').length===2);
+      await page.locator('.tile[data-slot="1"] [data-action="focus"]').click();
+      await second.waitForFunction(()=>document.querySelectorAll('.tile').length===1&&document.querySelector('.tile').dataset.slot==='1');
+      await page.locator('.tile[data-slot="1"] [data-action="focus"]').click();
+      await second.waitForFunction(()=>document.querySelectorAll('.tile').length===2);
+      await page.locator('.toolbar [data-action="layout-9"]').click();
+      await second.waitForFunction(()=>document.querySelectorAll('.tile').length===9);
+      await page.locator('.tile[data-slot="8"] .tile-head [data-action="assign"]').click();
+      await page.locator('#dialog [data-action="assign-device"]').filter({hasText:'Segundo PiKVM de teste'}).click();
+      await second.waitForFunction(id=>document.querySelector('.video[data-slot="8"]')?.dataset.id===id,secondId);
+      await second.evaluate(()=>act('tab',{dataset:{id:'source-extra'}}));
+      await page.waitForFunction(()=>document.querySelector('.tab.active')?.dataset.id==='source-extra'&&document.querySelectorAll('.tile').length===4);
+      await page.locator('.toolbar [data-action="mirror-exit"]').click();
+      await page.waitForFunction(()=>!document.querySelector('.toolbar [data-action="mirror-exit"]'));
+      assert.deepEqual(await page.evaluate(()=>({id:activeTab().id,layout:activeTab().layout,slots:activeTab().slots})),before);
+      await page.locator('header [data-action="monitors"]').click();
+      await page.locator('#dialog [data-action="mirror-window"]').click();
+      await page.waitForSelector('.toolbar [data-action="mirror-exit"]');
+
       await second.evaluate(()=>window.room.call('remove-window')).catch(error=>{if(!error.message.includes('closed'))throw error;});console.log('Múltiplas janelas com portas de vídeo independentes OK');
       await page.bringToFront();
+      await page.waitForFunction(()=>!document.querySelector('.toolbar [data-action="mirror-exit"]'));
+      assert.deepEqual(await page.evaluate(()=>({id:activeTab().id,layout:activeTab().layout,slots:activeTab().slots})),before);
+      console.log('Espelho: streams, foco, edição bidirecional, retorno e janela de origem fechada OK');
       frame=Buffer.from(await page.evaluate(()=>{
         const canvas=document.createElement('canvas');canvas.width=320;canvas.height=180;
         const ctx=canvas.getContext('2d');ctx.fillStyle='#244364';ctx.fillRect(0,0,320,180);

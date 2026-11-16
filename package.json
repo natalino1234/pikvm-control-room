@@ -1,6 +1,6 @@
 {
   "name": "pikvm-control-room",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Central desktop para múltiplos PiKVMs e monitores",
   "main": "electron/main.cjs",
   "author": "natalino1234",

@@ -22,6 +22,7 @@ const query = new URLSearchParams(location.search), windowId = query.get('window
 let state, monitors = [], mediaBases, selectedId, selectedSlot = 0, focusedSlot = null, section = 'video', armed = null, fullscreen = false, audioFocus=null;
 let lastWorkspace = '', subscribed = '', toastTimer, eventTimer, immersive = false, editDeviceId = null, toolbarTimer;
 const hoverBlocked=new WeakSet();
+let workspaceViews=[],mirrorId=null;
 let hoveredVideo=null;
 const hoverFocusRequests=new WeakSet();
 const events = {}, imageRetry = new Map();
@@ -29,7 +30,36 @@ const players=new Map(),mediaReports=new Map();
 const audioReports=new Map(),audioLevels=new Map();
 const call = (name, ...args) => window.room.call(name, ...args);
 const dev = id => state.devices.find(d => d.id === id);
-const currentWindow = () => state.windows.find(w => w.id === windowId);
+const localWindow = () => state.windows.find(w => w.id === windowId);
+const currentWindow = () => state.windows.find(w => w.id === mirrorId) || localWindow();
+const viewOf = id => workspaceViews.find(w=>w.id===id);
+const displayOf = w => monitors.find(m=>m.id===(viewOf(w?.id)?.displayId??w?.displayId))||monitors.find(m=>m.primary);
+function monitorWindows(m){return state.windows.filter(w=>w.id!==windowId&&viewOf(w.id)&&displayOf(w)?.id===m.id);}
+function monitorWindowButtons(m){
+  return monitorWindows(m).map((w,i)=>{
+    const view=viewOf(w.id),tab=w.tabs.find(t=>t.id===w.activeTab)||w.tabs[0],active=w.id===mirrorId;
+    const title=`${tab.name} · ${view.focusedSlot==null?tab.layout+' área(s)':'Área '+(view.focusedSlot+1)}`;
+    return `<div class="window-mirror-entry"><span class="small muted" title="${esc(title)}">${esc(title)}</span>${btn('mirror-window',active?'Espelhando':view.mirrorId?'Já está espelhando':'Espelhar','screen','mirror-button',`data-id="${esc(w.id)}" aria-label="Espelhar ${esc(m.name)} · janela ${i+1}" ${active||view.mirrorId?'disabled':''}`)}</div>`;
+  }).join('');
+}
+function otherMonitors(){
+  const localDisplay=displayOf(localWindow());
+  return monitors.filter(m=>m.id!==localDisplay?.id||monitorWindows(m).length).map(m=>`<div class="monitor-card mirror-monitor"><strong>${esc(m.name)}</strong>${monitorWindowButtons(m)||'<span class="small muted">Sem janela de transmissão</span>'}</div>`).join('');
+}
+function syncWorkspaceViews(views){
+  const oldId=mirrorId,oldFocus=focusedSlot;
+  workspaceViews=views;
+  const requested=viewOf(windowId)?.mirrorId;
+  mirrorId=requested&&state.windows.some(w=>w.id===requested)&&viewOf(requested)?requested:null;
+  focusedSlot=viewOf(currentWindow()?.id)?.focusedSlot??null;
+  return {switched:oldId!==mirrorId,changed:oldId!==mirrorId||oldFocus!==focusedSlot};
+}
+function alignWorkspaceSelection(publish=false){
+  const t=activeTab();if(!t)return;
+  const slot=focusedSlot??(selectedSlot<t.layout?selectedSlot:0);
+  if(publish)selectDevice(t.slots[slot]||null,slot);
+  else {selectedId=t.slots[slot]||null;selectedSlot=slot;markTiles();renderControls();renderFooter();subscribe();}
+}
 const activeTab = () => { const w = currentWindow(); return w?.tabs.find(t => t.id === w.activeTab) || w?.tabs[0]; };
 const status = id => events[id]?.connection?.status || 'offline';
 const subsystem = (name, id = selectedId) => events[id]?.[`${name}_state`] || {};
@@ -63,17 +93,18 @@ function renderMicrophoneMaster(){
 }
 function renderSidebar() {
   if (central) return;
-  const w = currentWindow(), monitor = monitors.find(m => m.id === w.displayId) || monitors.find(m => m.primary);
-  $('#sidebar').innerHTML = `<div><div class="row"><span class="eyebrow">Equipamentos</span>${btn('add-device','','plus','ghost icon-btn','title="Adicionar PiKVM"')}</div><div class="device-list">${state.devices.map(d => `<button class="device ${d.id === selectedId ? 'selected' : ''}" data-action="select-device" data-id="${esc(d.id)}" title="Selecionar ${esc(d.name)}">${icon('screen')}<span class="device-name">${esc(d.name)}<small>${esc(new URL(d.url).host)}</small></span><span class="audio-badge" aria-label="Atividade sonora">♫</span>${badge(status(d.id))}</button>`).join('')}</div></div><div><div class="eyebrow">Esta janela</div><div class="monitor-card"><div class="row">${icon('screen')}<span>${esc(monitor?.name || 'Monitor')}</span></div><div class="small muted" style="margin-top:9px">${monitor?.bounds.width || '—'} × ${monitor?.bounds.height || '—'} · ${w.tabs.length} aba(s)</div></div></div><div class="side-bottom"><div class="stack">${btn('add-tab','<span class="label">Nova aba</span>','plus','ghost fill')}${btn('toggle-controls','<span class="label">Mostrar / ocultar central</span>','settings','ghost fill')}</div><div class="side-note">Selecione uma área para direcionar os controles.<br>Entre no quadrante para controlar.</div></div>`;
+  const w = localWindow();if(!w)return;const monitor=displayOf(w),others=otherMonitors();
+  $('#sidebar').innerHTML = `<div><div class="row"><span class="eyebrow">Equipamentos</span>${btn('add-device','','plus','ghost icon-btn','title="Adicionar PiKVM"')}</div><div class="device-list">${state.devices.map(d => `<button class="device ${d.id === selectedId ? 'selected' : ''}" data-action="select-device" data-id="${esc(d.id)}" title="Selecionar ${esc(d.name)}">${icon('screen')}<span class="device-name">${esc(d.name)}<small>${esc(new URL(d.url).host)}</small></span><span class="audio-badge" aria-label="Atividade sonora">♫</span>${badge(status(d.id))}</button>`).join('')}</div></div><div><div class="eyebrow">Esta janela</div><div class="monitor-card"><div class="row">${icon('screen')}<span>${esc(monitor?.name || 'Monitor')}</span></div><div class="small muted" style="margin-top:9px">${monitor?.bounds.width || '—'} × ${monitor?.bounds.height || '—'} · ${w.tabs.length} aba(s)</div></div>${others?btn('monitors','','screen','ghost icon-btn mirror-compact','title="Outros monitores e janelas" aria-label="Outros monitores e janelas"'):''}${others?`<div class="monitor-mirrors"><span class="eyebrow">Outros monitores e janelas</span>${others}</div>`: ''}</div><div class="side-bottom"><div class="stack">${btn('add-tab','<span class="label">Nova aba</span>','plus','ghost fill')}${btn('toggle-controls','<span class="label">Mostrar / ocultar central</span>','settings','ghost fill')}</div><div class="side-note">Selecione uma área para direcionar os controles.<br>Entre no quadrante para controlar.</div></div>`;
 }
 function renderWorkspace(force = false) {
   if (central) return;
   const w = currentWindow(), t = activeTab();
-  const key = JSON.stringify([w.tabs,w.activeTab, focusedSlot, state.devices.map(d => [d.id,d.name,d.url,d.transport])]);
+  if(!w||!t)return;
+  const key = JSON.stringify([w.id,w.tabs,w.activeTab, focusedSlot, state.devices.map(d => [d.id,d.name,d.url,d.transport])]);
   if (!force && key === lastWorkspace) return;
   release();hoveredVideo=null;for(const player of players.values())player.stop();players.clear(); window.room.stopStreams(); lastWorkspace = key;
   for (const timer of imageRetry.values()) clearTimeout(timer); imageRetry.clear();
-  $('#main').innerHTML = `<div class="workspace-heading"><div><h1>Sala de controle</h1><p>Todos os seus equipamentos. Uma única visão.</p></div><div class="toolbar"><div class="segmented" aria-label="Divisão da janela">${[1,2,4,9].map(n => btn(`layout-${n}`,n===9?'9':'',n === 1 ? 'single' : n === 2 ? 'split' : 'grid',t.layout === n && focusedSlot == null ? 'active' : '',`title="${n} área(s)" aria-label="${n} área(s)"`)).join('')}</div>${btn('immersive','Só vídeo','expand','ghost')}</div></div><nav class="tabs" aria-label="Workspaces">${w.tabs.map(tab => `<button class="tab ${tab.id === t.id ? 'active' : ''}" data-action="tab" data-id="${esc(tab.id)}">${esc(tab.name)}${w.tabs.length > 1 ? `<span class="tab-close" data-action="close-tab" data-id="${esc(tab.id)}" title="Fechar aba">×</span>` : ''}</button>`).join('')}${btn('add-tab','','plus','ghost icon-btn','title="Nova aba"')}${btn('rename-tab','','edit','ghost icon-btn','title="Renomear aba"')}</nav><div class="grid layout-${focusedSlot == null ? t.layout : 1}">${(focusedSlot == null ? Array.from({ length:t.layout }, (_,i) => i) : [focusedSlot]).map(i => tile(t.slots[i], i)).join('')}</div>`;
+  $('#main').innerHTML = `<div class="workspace-heading"><div><h1>${mirrorId?'Espelhando '+esc(displayOf(w)?.name||'outra janela'):'Sala de controle'}</h1><p>${mirrorId?'Alterações de abas, divisão e áreas são aplicadas à janela exibida.':'Todos os seus equipamentos. Uma única visão.'}</p></div><div class="toolbar">${mirrorId?btn('mirror-exit','Voltar à minha janela','arrow','ghost'):''}<div class="segmented" aria-label="Divisão da janela">${[1,2,4,9].map(n => btn(`layout-${n}`,n===9?'9':'',n === 1 ? 'single' : n === 2 ? 'split' : 'grid',t.layout === n && focusedSlot == null ? 'active' : '',`title="${n} área(s)" aria-label="${n} área(s)"`)).join('')}</div>${btn('immersive','Só vídeo','expand','ghost')}</div></div><nav class="tabs" aria-label="Workspaces">${w.tabs.map(tab => `<button class="tab ${tab.id === t.id ? 'active' : ''}" data-action="tab" data-id="${esc(tab.id)}">${esc(tab.name)}${w.tabs.length > 1 ? `<span class="tab-close" data-action="close-tab" data-id="${esc(tab.id)}" title="Fechar aba">×</span>` : ''}</button>`).join('')}${btn('add-tab','','plus','ghost icon-btn','title="Nova aba"')}${btn('rename-tab','','edit','ghost icon-btn','title="Renomear aba"')}</nav><div class="grid layout-${focusedSlot == null ? t.layout : 1}">${(focusedSlot == null ? Array.from({ length:t.layout }, (_,i) => i) : [focusedSlot]).map(i => tile(t.slots[i], i)).join('')}</div>`;
   renderFullscreenToolbar();
   if (!$('#immersive-exit')) { const b = document.createElement('button'); b.id = 'immersive-exit'; b.className = 'immersive-exit'; b.dataset.action = 'exit-immersive'; b.innerHTML = `${icon('settings')} Exibir controles · F10`; document.body.appendChild(b); }
   document.querySelectorAll('.video').forEach(bindVideo);
@@ -182,7 +213,7 @@ function deviceDialog(id) {
   const d = dev(id); editDeviceId = d?.id || null;
   modal(`<h2>${d ? 'Editar equipamento' : 'Adicionar PiKVM'}</h2><p>Cadastre a conexão. A senha é protegida pelo Windows e não aparece no arquivo de configuração em texto aberto.</p><form id="device-form">${field('Nome', `<input name="name" value="${esc(d?.name || '')}" placeholder="Ex.: Servidor de produção" required maxlength="80">`)}${field('Endereço', `<input name="url" value="${esc(d?.url || '')}" placeholder="https://pikvm.exemplo.local/kvm/" required>`)}<div class="two">${field('Usuário', `<input name="username" value="${esc(d?.username || 'admin')}" required autocomplete="off">`)}${field('Senha', `<input name="password" type="password" placeholder="${d ? 'Manter senha atual' : 'Senha do PiKVM'}" ${d ? '' : 'required'} autocomplete="new-password">`)}</div><label class="check"><input type="checkbox" name="insecure" ${d?.insecure || !d ? 'checked' : ''}>Permitir certificado autoassinado neste PiKVM</label><div class="dialog-actions">${btn('cancel','Cancelar')}<button class="primary" type="submit">Salvar equipamento</button></div></form>`);
 }
-async function persistWorkspace() { release(); const w = currentWindow(); await call('save-window', {tabs:w.tabs,activeTab:w.activeTab}); renderWorkspace(); renderSidebar(); }
+async function persistWorkspace(resetFocus=false) { release(); const w = currentWindow(); await call('save-window', {windowId:w.id,tabs:w.tabs,activeTab:w.activeTab,resetFocus}); renderWorkspace(); renderSidebar(); }
 async function api(route, params = {}, method = 'POST', body, id = selectedId) { if (!id) throw new Error('Selecione um PiKVM.'); const qs = new URLSearchParams(params).toString(); return call('api', id, method, route + (qs ? `?${qs}` : ''), body); }
 async function refresh(id = selectedId) {
   if (!id) return;
@@ -197,7 +228,7 @@ function confirmAction(title, description, perform) {
 }
 async function act(action, el) {
   if (action.startsWith('section-')) { release(); section=action.slice(8); renderControls(); if(section === 'input') loadKeymaps(); return; }
-  if (action.startsWith('layout-')) { focusedSlot=null; activeTab().layout=Number(action.slice(7)); if(selectedSlot >= activeTab().layout) selectedSlot=0; await persistWorkspace(); return; }
+  if (action.startsWith('layout-')) { focusedSlot=null; activeTab().layout=Number(action.slice(7)); if(selectedSlot >= activeTab().layout) selectedSlot=0; await persistWorkspace(true);alignWorkspaceSelection(true); return; }
   switch(action) {
     case 'cancel': closeModal(); break;
     case 'add-device': deviceDialog(); break;
@@ -216,16 +247,22 @@ async function act(action, el) {
     case 'immersive': if(!fullscreen)await call('fullscreen');else setFullscreen(true);break;
     case 'fullscreen-controls':release();document.body.classList.toggle('fullscreen-controls');break;
     case 'exit-immersive':if(fullscreen)await call('fullscreen');else setFullscreen(false);break;
-    case 'focus': release(); selectedSlot=Number(el.dataset.slot); focusedSlot=focusedSlot == null ? selectedSlot : null; renderWorkspace();selectDevice(activeTab().slots[selectedSlot],selectedSlot); break;
+    case 'mirror-window': closeModal();release();await call('mirror-window',el.dataset.id);alignWorkspaceSelection(true);break;
+    case 'mirror-exit': closeModal();release();await call('mirror-window',null);alignWorkspaceSelection(true);break;
+    case 'focus': {
+      release();const slot=Number(el.dataset.slot),next=focusedSlot==null?slot:null;
+      if(next!==null&&!activeTab()?.slots[next])break;
+      await call('workspace-focus',currentWindow().id,next);alignWorkspaceSelection(true);break;
+    }
     case 'assign': {
       selectedSlot=Number(el.dataset.slot); modal(`<h2>Equipamento da área ${selectedSlot+1}</h2><p>Escolha o PiKVM que será exibido nesta área.</p><div class="stack">${state.devices.map(d => btn('assign-device',esc(d.name),'screen','screen-option',`data-id="${esc(d.id)}"`)).join('')}${btn('assign-device','Deixar área vazia','','screen-option','data-id=""')}<div class="divider"></div>${btn('add-device','Cadastrar novo equipamento','plus','fill')}${btn('cancel','Cancelar')}</div>`); break;
     }
-    case 'assign-device': activeTab().slots[selectedSlot]=el.dataset.id || null; closeModal(); await persistWorkspace(); if(el.dataset.id) selectDevice(el.dataset.id,selectedSlot); break;
+    case 'assign-device': activeTab().slots[selectedSlot]=el.dataset.id || null; closeModal(); await persistWorkspace(); selectDevice(el.dataset.id||null,selectedSlot); break;
     case 'tab': release(); focusedSlot=null; currentWindow().activeTab=el.dataset.id; selectedSlot=0; selectedId=activeTab().slots[0]; await persistWorkspace(); selectDevice(selectedId,0); break;
-    case 'add-tab': { const w=currentWindow(), t={id:crypto.randomUUID(),name:`Workspace ${String(w.tabs.length+1).padStart(2,'0')}`,layout:1,slots:Array(9).fill(null),fit:'contain'}; w.tabs.push(t); w.activeTab=t.id; focusedSlot=null; await persistWorkspace(); break; }
-    case 'close-tab': { const w=currentWindow(); if(w.tabs.length===1) return; w.tabs=w.tabs.filter(t=>t.id!==el.dataset.id); if(w.activeTab===el.dataset.id) w.activeTab=w.tabs[0].id; focusedSlot=null; await persistWorkspace(); break; }
+    case 'add-tab': { const w=currentWindow(), t={id:crypto.randomUUID(),name:`Workspace ${String(w.tabs.length+1).padStart(2,'0')}`,layout:1,slots:Array(9).fill(null),fit:'contain'}; w.tabs.push(t); w.activeTab=t.id; focusedSlot=null;selectedSlot=0;await persistWorkspace(true);alignWorkspaceSelection();break; }
+    case 'close-tab': { const w=currentWindow(); if(w.tabs.length===1) return; w.tabs=w.tabs.filter(t=>t.id!==el.dataset.id); if(w.activeTab===el.dataset.id) w.activeTab=w.tabs[0].id; focusedSlot=null;await persistWorkspace(true);alignWorkspaceSelection();break; }
     case 'rename-tab': modal(`<h2>Renomear aba</h2><form id="rename-form">${field('Nome',`<input name="name" required maxlength="80" value="${esc(activeTab().name)}">`)}<div class="dialog-actions">${btn('cancel','Cancelar')}<button type="submit" class="primary">Salvar</button></div></form>`); break;
-    case 'monitors': modal(`<h2>Monitores e janelas</h2><p>Abra uma janela em cada monitor. Cada janela mantém suas próprias abas e divisões.</p><div class="stack">${monitors.map(m => `<div class="monitor-card"><div class="row">${icon('screen')}<strong>${esc(m.name)}</strong><span class="muted small">${m.bounds.width} × ${m.bounds.height}</span></div><div class="two" style="margin-top:12px">${btn('move-monitor','Mover esta janela','','',`data-display="${m.id}"`)}${btn('new-monitor','Nova janela','plus','',`data-display="${m.id}"`)}</div></div>`).join('')}<div class="hint">Com um monitor, use várias abas ou abra outra janela. F11 alterna a transmissão em tela cheia. Aproxime o mouse do topo para mostrar a barra de ações.</div>${state.windows.length>1 ? btn('remove-window','Remover esta janela do workspace','','danger') : ''}${btn('cancel','Fechar')}</div>`); break;
+    case 'monitors': modal(`<h2>Monitores e janelas</h2><p>Abra uma janela em cada monitor. Cada janela mantém suas próprias abas e divisões. Use Espelhar para gerenciar uma janela daqui.</p><div class="stack">${monitors.map(m => `<div class="monitor-card"><div class="row">${icon('screen')}<strong>${esc(m.name)}</strong><span class="muted small">${m.bounds.width} × ${m.bounds.height}</span></div><div class="two" style="margin-top:12px">${btn('move-monitor','Mover esta janela','','',`data-display="${m.id}"`)}${btn('new-monitor','Nova janela','plus','',`data-display="${m.id}"`)}</div>${monitorWindowButtons(m)}</div>`).join('')}<div class="hint">Com um monitor, use várias abas ou abra outra janela. F11 alterna a transmissão em tela cheia. Aproxime o mouse do topo para mostrar a barra de ações.</div>${mirrorId?btn('mirror-exit','Voltar à minha janela','arrow'):''}${state.windows.length>1 ? btn('remove-window','Remover esta janela do workspace','','danger') : ''}${btn('cancel','Fechar')}</div>`); break;
     case 'new-monitor': closeModal(); await call('new-window',Number(el.dataset.display)); break;
     case 'move-monitor': closeModal(); await call('move-window',Number(el.dataset.display)); break;
     case 'remove-window': closeModal(); await call('remove-window'); break;
@@ -264,7 +301,21 @@ document.addEventListener('keydown',e=>{
   if(e.code==='F11'){e.preventDefault();call('fullscreen').catch(error=>toast(error.message,true));}
 },true);
 document.addEventListener('keyup',e=>{if((e.code==='KeyM'||e.key?.toLowerCase()==='m')&&microphoneShortcutHeld){microphoneShortcutHeld=false;e.preventDefault();e.stopImmediatePropagation();}},true);
-window.room.on('state',value=>{state=value;CaptionUI.update(value.transcription);audioFocus=value.audioFocus;if(!dev(selectedId)) selectedId=value.selected || activeTab()?.slots[0] || null; renderMicrophoneMaster();renderSidebar();renderWorkspace();renderControls();renderFooter();updateAudio();});
+window.room.on('state',value=>{
+  const previousTab=state&&activeTab(),previousSlot=previousTab?.slots[selectedSlot];
+  state=value;const view=central?{}:syncWorkspaceViews(value.workspaceViews);CaptionUI.update(value.transcription);audioFocus=value.audioFocus;
+  if(view.switched){closeModal();selectedSlot=0;}else if(previousTab?.id!==activeTab()?.id&&$('#dialog').querySelector('[data-action=assign-device],#rename-form'))closeModal();
+  if(!central&&(view.changed||previousTab?.id!==activeTab()?.id||previousSlot!==activeTab()?.slots[selectedSlot]))alignWorkspaceSelection();
+  else if(!dev(selectedId))selectedId=value.selected||activeTab()?.slots[0]||null;
+  renderMicrophoneMaster();renderSidebar();renderWorkspace();renderControls();renderFooter();updateAudio();
+});
+window.room.on('workspace-views',views=>{
+  if(!state||central||!localWindow())return;
+  const view=syncWorkspaceViews(views);
+  if(view.switched){closeModal();selectedSlot=0;}
+  if(view.changed){renderWorkspace();alignWorkspaceSelection();}
+  else renderSidebar();
+});
 window.room.on('selection',id=>{if(central){selectedId=id;release();renderControls();subscribe();}});
 window.room.on('fullscreen',setFullscreen);
 window.room.on('escape-controls',escapeControl);
@@ -292,7 +343,7 @@ function setFullscreen(value){fullscreen=value;if(!central){immersive=value;docu
 function renderFullscreenToolbar(){
   const bar=$('#rdp-toolbar');if(!immersive||central){bar.replaceChildren();return;}
   const w=currentWindow(),t=activeTab();
-  bar.innerHTML='<span class="rdp-name">PiKVM · F10 liberar</span><select id="fullscreen-tab" aria-label="Aba">'+w.tabs.map(tab=>'<option value="'+esc(tab.id)+'" '+(tab.id===t.id?'selected':'')+'>'+esc(tab.name)+'</option>').join('')+'</select>'+[1,2,4,9].map(n=>btn('layout-'+n,String(n)+' área(s)',null,t.layout===n&&focusedSlot==null?'active':'')).join('')+btn('focus',focusedSlot==null?'Ampliar área':'Voltar à divisão','expand','', 'data-slot="'+selectedSlot+'"')+btn('fullscreen-controls','Central / ações','settings')+btn('central','Destacar central','detach')+btn('monitors','Monitores','screen')+btn('exit-immersive','Sair · F11','close');
+  bar.innerHTML='<span class="rdp-name">PiKVM · F10 liberar</span><select id="fullscreen-tab" aria-label="Aba">'+w.tabs.map(tab=>'<option value="'+esc(tab.id)+'" '+(tab.id===t.id?'selected':'')+'>'+esc(tab.name)+'</option>').join('')+'</select>'+[1,2,4,9].map(n=>btn('layout-'+n,String(n)+' área(s)',null,t.layout===n&&focusedSlot==null?'active':'')).join('')+btn('focus',focusedSlot==null?'Ampliar área':'Voltar à divisão','expand','', 'data-slot="'+selectedSlot+'"')+(mirrorId?btn('mirror-exit','Voltar à minha janela','arrow'): '')+btn('fullscreen-controls','Central / ações','settings')+btn('central','Destacar central','detach')+btn('monitors','Monitores','screen')+btn('exit-immersive','Sair · F11','close');
 }
 $('#rdp-edge').addEventListener('mouseenter',()=>{release();revealToolbar();});
 $('#rdp-edge').addEventListener('mouseleave',()=>{toolbarTimer=setTimeout(()=>$('#rdp-toolbar').classList.remove('revealed'),650);});
@@ -301,4 +352,4 @@ $('#rdp-toolbar').addEventListener('mouseleave',()=>{if(document.activeElement?.
 $('#rdp-toolbar').addEventListener('focusout',()=>{if(!$('#rdp-toolbar').contains(document.activeElement))toolbarTimer=setTimeout(()=>$('#rdp-toolbar').classList.remove('revealed'),650);});
 document.addEventListener('change',e=>{if(e.target.id==='fullscreen-tab')act('tab',{dataset:{id:e.target.value}}).catch(error=>toast(error.message,true));});
 
-(async()=>{try{const boot=await call('boot');state=boot;CaptionUI.update(boot.transcription);audioFocus=boot.audioFocus;for(const r of boot.mediaReports||[])mediaReports.set(`${r.owner}:${r.slot}`,r);for(const r of boot.audioReports||[])audioReports.set(r.id,r);for(const r of boot.audioLevels||[])audioLevels.set(r.id,r);monitors=boot.displays;mediaBases=boot.mediaBases;fullscreen=boot.fullscreen;selectedId=central ? boot.selected : activeTab()?.slots[0] || state.devices[0]?.id;document.body.classList.toggle('central-only',central);renderHeader();renderMicrophoneMaster();renderSidebar();renderWorkspace();renderControls();renderFooter();setFullscreen(fullscreen);subscribe();if(!central && selectedId)call('select',selectedId,selectedSlot); }catch(error){toast(error.message,true);}})();
+(async()=>{try{const boot=await call('boot');state=boot;CaptionUI.update(boot.transcription);audioFocus=boot.audioFocus;for(const r of boot.mediaReports||[])mediaReports.set(`${r.owner}:${r.slot}`,r);for(const r of boot.audioReports||[])audioReports.set(r.id,r);for(const r of boot.audioLevels||[])audioLevels.set(r.id,r);monitors=boot.displays;if(!central)syncWorkspaceViews(boot.workspaceViews);mediaBases=boot.mediaBases;fullscreen=boot.fullscreen;selectedId=central ? boot.selected : activeTab()?.slots[0] || state.devices[0]?.id;document.body.classList.toggle('central-only',central);renderHeader();renderMicrophoneMaster();renderSidebar();renderWorkspace();renderControls();renderFooter();setFullscreen(fullscreen);subscribe();if(!central && selectedId)call('select',selectedId,selectedSlot); }catch(error){toast(error.message,true);}})();

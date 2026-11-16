@@ -6,3 +6,11 @@
 .grid.layout-9 .tile .title{min-width:0;overflow:hidden}.grid.layout-9 .tile .right{flex-shrink:0}.grid.layout-9 .empty{padding:4px;gap:4px;text-align:center}.grid.layout-9 .empty p{display:none}
 
 .control-active-badge{display:none;position:absolute;top:8px;right:8px;z-index:5;padding:5px 8px;border:1px solid #4abf9a66;border-radius:5px;background:#10241ef5;color:#8af0c9;font-size:9px;letter-spacing:.5px;pointer-events:none;white-space:nowrap}.video.armed .control-active-badge{display:block}.immersive .control-active-badge{top:36px}.tile:has(.armed) .recording-indicator{top:69px}.scroll-speed-value{color:var(--accent);font-variant-numeric:tabular-nums}
+
+.monitor-mirrors{margin-top:16px;display:grid;gap:5px}
+.mirror-monitor{display:grid;gap:6px;margin-top:4px}
+.mirror-monitor>strong,.window-mirror-entry>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.window-mirror-entry{display:grid;align-items:start;gap:6px;min-width:0;margin-top:7px}
+.window-mirror-entry .mirror-button{justify-self:start;padding:5px 8px;font-size:11px}
+.mirror-compact{display:none}
+@media(max-width:900px){.monitor-mirrors{display:none}.mirror-compact{display:inline-flex}}
