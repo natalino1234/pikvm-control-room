@@ -13,17 +13,24 @@ const transport = process.argv.find(a=>a.startsWith('--transport='))?.split('=')
 const root = path.resolve(__dirname,'..');
 async function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(),'pikvm-smoke-'));
-  let mock, wss, app;
-  const hidEvents=[];
+  let mock, wss, app, frame;
+  const activeStreams=new Set();
+  const hidEvents=[],hidPeers=new Map();
   try {
     if(live&&!process.env.PIKVM_URL)throw Error('Defina PIKVM_URL para o teste com equipamento real.');
     let url=process.env.PIKVM_URL||'https://192.0.2.10';
     if(!live){
       mock=http.createServer((req,res)=>{
+        if(frame&&req.url.startsWith('/streamer/stream')){
+          res.setHeader('Content-Type','multipart/x-mixed-replace; boundary=frame');
+          activeStreams.add(res);
+          const send=()=>{res.write('--frame\r\nContent-Type: image/jpeg\r\nContent-Length: '+frame.length+'\r\n\r\n');res.write(frame);res.write('\r\n');};
+          send();const timer=setInterval(send,120);res.on('close',()=>{clearInterval(timer);activeStreams.delete(res);});return;
+        }
         if(req.url.startsWith('/streamer/stream')){res.setHeader('Content-Type','image/svg+xml');res.end('<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080"><rect width="1920" height="1080" fill="#182f48"/><text x="960" y="540" text-anchor="middle" fill="#8dc8b5" font-size="50">Servidor de teste · 1920 × 1080</text></svg>');return;}
         res.setHeader('Content-Type','application/json');res.end(JSON.stringify({ok:true,result:{system:{kvmd:{version:'test'}}}}));
       });await new Promise(r=>mock.listen(0,'127.0.0.1',r));url=`http://127.0.0.1:${mock.address().port}`;
-      wss=new WebSocketServer({server:mock});wss.on('connection',(ws,req)=>{if(req.url!=='/api/ws'){ws.close(1008,'Transporte indisponível no mock');return;}for(const [event_type,event] of Object.entries({streamer_state:{params:{desired_fps:30,quality:80},streamer:{source:{online:true,resolution:{width:1920,height:1080},captured_fps:30}}},hid_state:{online:true,mouse:{absolute:true}},atx_state:{enabled:true,leds:{power:true}},msd_state:{enabled:true,storage:{images:{'teste.iso':{}}},drive:{connected:false}}}))ws.send(JSON.stringify({event_type,event}));ws.on('message',(b,binary)=>{if(!binary)return;hidEvents.push({opcode:b[0],state:!!b[1],key:b.subarray(2).toString('ascii'),raw:[...b]});});});
+      wss=new WebSocketServer({server:mock});wss.on('connection',(ws,req)=>{if(req.url!=='/api/ws'){ws.close(1008,'Transporte indisponível no mock');return;}const target=req.headers['x-kvmd-user'];hidPeers.set(target,ws);for(const [event_type,event] of Object.entries({streamer_state:{params:{desired_fps:30,quality:80},streamer:{source:{online:true,resolution:{width:1920,height:1080},captured_fps:30}}},hid_state:{online:true,mouse:{absolute:true}},atx_state:{enabled:true,leds:{power:true}},msd_state:{enabled:true,storage:{images:{'teste.iso':{}}},drive:{connected:false}}}))ws.send(JSON.stringify({event_type,event}));ws.on('message',(b,binary)=>{if(!binary)return;hidEvents.push({target,opcode:b[0],state:!!b[1],key:b.subarray(2).toString('ascii'),raw:[...b]});});});
     }
     const config={devices:[{id:'test-device',name:live?'PiKVM principal':'Servidor de teste',url,username:'admin',defaultPassword:true,insecure:true,transport,micEnabled:mic,audioEnabled:live}],windows:[{id:'test-window',fullscreen:false,tabs:[{id:'test-tab',name:'Workspace 01',layout:4,slots:['test-device',null,null,null],fit:'contain'}],activeTab:'test-tab'}]};
     fs.writeFileSync(path.join(dir,'config.json'),JSON.stringify(config));
@@ -145,12 +152,81 @@ async function main() {
     }
     await page.waitForTimeout(400);fs.mkdirSync(path.join(root,'artifacts'),{recursive:true});await page.screenshot({path:path.join(root,'artifacts',live?'live.png':'smoke.png')});
     if(!live){
+      const secondId=await page.evaluate(async url=>{
+        const id=await window.room.call('save-device',{name:'Segundo PiKVM de teste',url,username:'second',password:'test-only'});
+        const boot=await window.room.call('boot'),w=boot.windows[0];
+        w.tabs.find(t=>t.id===w.activeTab).slots[1]=id;
+        await window.room.call('save-window',{tabs:w.tabs,activeTab:w.activeTab});return id;
+      },url);
+      const firstVideo=page.locator('.video[data-slot="0"]'),secondVideo=page.locator('.video[data-slot="1"]');
+      await secondVideo.waitFor();await page.waitForFunction(id=>events[id]?.connection?.status==='online',secondId);
+      const firstBox=await firstVideo.boundingBox(),secondBox=await secondVideo.boundingBox();
+      const moveTo=b=>page.mouse.move(b.x+b.width/2,b.y+b.height/2);
+      const since=hidEvents.length;
+      await moveTo(firstBox);await page.waitForSelector('.video[data-slot="0"].armed');await page.keyboard.down('z');await page.mouse.down();
+      await moveTo(secondBox);await page.waitForSelector('.video[data-slot="1"].armed');
+      await page.keyboard.up('z');await page.mouse.up();await page.keyboard.press('x');
+      const sent=()=>hidEvents.slice(since);
+      assert.ok(sent().some(e=>e.target==='admin'&&e.key==='KeyZ'&&!e.state),'Tecla pressionada deve ser liberada no primeiro PiKVM');
+      assert.ok(sent().some(e=>e.target==='admin'&&e.opcode===2&&e.key==='left'&&!e.state),'Botão pressionado deve ser liberado no primeiro PiKVM');
+      assert.ok(!sent().some(e=>e.target==='second'&&(e.key==='KeyZ'||e.opcode===2)),'O segundo PiKVM não deve receber liberações de entradas do primeiro');
+      assert.ok(sent().some(e=>e.target==='second'&&e.opcode===3),'Movimento na entrada chega ao segundo PiKVM');
+      assert.ok(sent().some(e=>e.target==='second'&&e.key==='KeyX'&&e.state),'Teclado acompanha o segundo PiKVM sem clique');
+      const hidState=online=>hidPeers.get('second').send(JSON.stringify({event_type:'hid_state',event:{online,mouse:{absolute:true}}}));
+      hidState(false);await page.waitForFunction(()=>!document.querySelector('.armed'));hidState(true);await page.waitForSelector('.video[data-slot="1"].armed');
+      await page.keyboard.press('F10');await page.waitForFunction(()=>!document.querySelector('.armed'));hidState(true);await page.waitForTimeout(100);assert.equal(await page.locator('.armed').count(),0);
+      await moveTo(firstBox);await moveTo(secondBox);await page.waitForSelector('.video[data-slot="1"].armed');await page.mouse.move(0,100);await page.waitForFunction(()=>!document.querySelector('.armed'));
+      console.log('Troca de PiKVM sem clique, liberação no destino anterior e recuperação sob o cursor OK');
+      await page.locator('#controls [data-action="section-input"]').click();
+      const slider=page.getByRole('slider',{name:'Velocidade da rolagem'});
+      assert.equal(await slider.inputValue(),'5');
+      for(const [key,speed] of [['End',10],['Home',1]]){
+        await slider.press(key);
+        await page.waitForFunction(async ({id,speed})=>(await window.room.call('boot')).devices.find(d=>d.id===id).scrollSpeed===speed,{id:secondId,speed});
+        assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'config.json'),'utf8')).devices.find(d=>d.id===secondId).scrollSpeed,speed);
+        const mark=hidEvents.length;await moveTo(secondBox);await page.waitForSelector('.video[data-slot="1"].armed');await page.mouse.wheel(-50,100);
+        await page.waitForTimeout(100);
+        assert.ok(hidEvents.slice(mark).some(e=>e.target==='second'&&e.opcode===5&&e.raw[2]===speed&&e.raw[3]===256-speed),'A velocidade deve alterar os dois eixos da rolagem enviada');
+        const badge=secondVideo.locator('.control-active-badge'),bounds=await badge.boundingBox();
+        assert.ok(bounds&&bounds.y-secondBox.y<16&&secondBox.x+secondBox.width-bounds.x-bounds.width<16,'Selo no canto superior direito');
+        await page.mouse.move(0,100);assert.equal(await badge.isVisible(),false);
+      }
+      console.log('Velocidade salva por PiKVM, rolagem nos dois eixos e selo no canto superior direito OK');
+
       const opened=app.waitForEvent('window',{timeout:15000});
       await page.evaluate(()=>window.room.call('new-window',null));const second=await opened;second.setDefaultTimeout(15000);
       await second.waitForSelector('.grid');
       const ports=await Promise.all([page.evaluate(()=>new URL(document.querySelector('.video img').src).port),second.evaluate(async()=>new URL((await window.room.call('boot')).mediaBase).port)]);
       assert.notEqual(ports[0],ports[1]);
       await second.evaluate(()=>window.room.call('remove-window')).catch(error=>{if(!error.message.includes('closed'))throw error;});console.log('Múltiplas janelas com portas de vídeo independentes OK');
+      await page.bringToFront();
+      frame=Buffer.from(await page.evaluate(()=>{
+        const canvas=document.createElement('canvas');canvas.width=320;canvas.height=180;
+        const ctx=canvas.getContext('2d');ctx.fillStyle='#244364';ctx.fillRect(0,0,320,180);
+        return canvas.toDataURL('image/jpeg').split(',')[1];
+      }),'base64');
+      await page.locator('.toolbar [data-action="layout-9"]').click();assert.equal(await page.locator('.tile').count(),9);
+      await page.evaluate(async id=>{
+        const w=(await window.room.call('boot')).windows[0],t=w.tabs.find(t=>t.id===w.activeTab);
+        t.slots=Array(9).fill('test-device');t.slots[8]=id;
+        await window.room.call('save-window',{tabs:w.tabs,activeTab:w.activeTab});
+      },secondId);
+      const ninePlaying=()=>page.waitForFunction(()=>document.querySelectorAll('.video[data-status="playing"]').length===9);
+      await ninePlaying();assert.equal(activeStreams.size,9,'Os nove streams MJPEG devem ficar abertos juntos');
+      const grid=await page.locator('.layout-9').evaluate(el=>[getComputedStyle(el).gridTemplateColumns,getComputedStyle(el).gridTemplateRows].map(n=>n.split(' ').length));
+      assert.deepEqual(grid,[3,3]);
+      await page.keyboard.press('F11');await page.waitForSelector('body.immersive');
+      await page.mouse.move(2,2);await page.waitForSelector('#rdp-toolbar.revealed');
+      await page.locator('#rdp-toolbar [data-action="layout-4"]').click();assert.equal(await page.locator('.tile').count(),4);
+      await page.locator('#rdp-toolbar [data-action="layout-9"]').click();await ninePlaying();
+      const ninth=page.locator('.video[data-slot="8"]');assert.equal(await ninth.getAttribute('data-id'),secondId);
+      const mark=hidEvents.length;await moveTo(await ninth.boundingBox());await page.waitForSelector('.video[data-slot="8"].armed');await page.keyboard.press('v');
+      assert.ok(hidEvents.slice(mark).some(e=>e.target==='second'&&e.key==='KeyV'&&e.state),'O nono quadrante controla pelo cursor');
+      assert.equal(activeStreams.size,9);
+      const badge=await ninth.locator('.control-active-badge').boundingBox(),box=await ninth.boundingBox();
+      assert.ok(badge&&badge.y-box.y<45&&box.x+box.width-badge.x-badge.width<16,'Selo no canto superior direito em tela cheia');
+      console.log('Grade 3 × 3 com nove streams MJPEG contínuos, retorno ao layout e HID no nono quadrante OK');
+
     }
     console.log(`Smoke ${live?'LIVE (somente leitura)':'mock'} OK. ${hidEvents.length} eventos no mock.`);
   } catch(error) { console.error('Falha durante smoke:',error); throw error; }

@@ -9,7 +9,7 @@ test('proxy local autentica no PiKVM, preserva mensagens binárias e rejeita ori
   const server=http.createServer();const close=attachMediaBridge(server,{token:'token',owner:'window1',getDevice:id=>{assert.equal(id,'d1');return {url:`http://127.0.0.1:${remote.address().port}`,username:'operator',password:'private'};}});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
   t.after(()=>{close();server.close();for(const s of remote.clients)s.terminate();remote.close();});
-  const url=`ws://127.0.0.1:${server.address().port}/token/h264/d1?owner=window1&slot=0`;
+  const url=`ws://127.0.0.1:${server.address().port}/token/h264/d1?owner=window1&slot=8`;
   const local=new WebSocket(url,{origin:'file://'});await new Promise((r,j)=>{local.once('open',r);local.once('error',j);});
   const reply=new Promise(r=>local.once('message',(bytes,binary)=>r({bytes,binary})));local.send(Buffer.from([1,1,0,255]));
   const received=await reply;assert.equal(received.binary,true);assert.deepEqual([...received.bytes],[1,1,0,255]);local.terminate();

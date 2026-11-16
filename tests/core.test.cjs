@@ -28,9 +28,11 @@ test('normaliza a URL e rejeita esquemas e credenciais embutidas', () => {
   assert.equal(origin('https://pikvm.local:8443/kvm/?x=1'), 'https://pikvm.local:8443');
   for (const url of ['file:///C:/x','javascript:alert(1)','https://admin:secret@host']) assert.throws(() => origin(url));
 });
-test('preserva quatro atribuições ao alternar layouts e remove equipamentos desconhecidos', () => {
+test('preserva até nove atribuições ao alternar layouts e remove equipamentos desconhecidos', () => {
   const t=validateTab({id:'t',name:'Sala',layout:2,slots:['a','b','invalid','a'],fit:'fill'},[{id:'a'},{id:'b'}]);
-  assert.deepEqual(t.slots,['a','b',null,'a']); assert.equal(t.fit,'fill');
+  assert.deepEqual(t.slots,['a','b',null,'a',null,null,null,null,null]); assert.equal(t.fit,'fill');
+  const nine=validateTab({...t,layout:9,slots:[...t.slots.slice(0,8),'b']},[{id:'a'},{id:'b'}]);
+  assert.equal(validateTab({...nine,layout:1},[{id:'a'},{id:'b'}]).slots[8],'b');
   assert.throws(()=>validateTab({...t,layout:3},[]));
 });
 test('mouse considera barras pretas, proporção e coordenadas absolutas', () => {

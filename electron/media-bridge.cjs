@@ -1,11 +1,12 @@
 const { WebSocket, WebSocketServer } = require('ws');
+const {isSlot}=require('./model.cjs');
 // Credenciais ficam no processo principal. O renderer usa somente o token local.
 function attachMediaBridge(server, { token, owner, getDevice }) {
   const gateway = new WebSocketServer({ noServer:true, maxPayload:2*1024*1024 });
   const pairs = new Set();
   server.on('upgrade',(req,socket,head)=>{
     const url = new URL(req.url,'http://localhost'), parts=url.pathname.split('/');
-    if(parts[1]!==token || !['janus','h264'].includes(parts[2]) || url.searchParams.get('owner')!==owner || !['0','1','2','3'].includes(url.searchParams.get('slot')) || !['file://','null'].includes(req.headers.origin)) { socket.destroy();return; }
+    if(parts[1]!==token || !['janus','h264'].includes(parts[2]) || url.searchParams.get('owner')!==owner || !/^\d$/.test(url.searchParams.get('slot')??'') || !isSlot(Number(url.searchParams.get('slot'))) || !['file://','null'].includes(req.headers.origin)) { socket.destroy();return; }
     let device;try{device=getDevice(decodeURIComponent(parts[3]));}catch{socket.destroy();return;}
     gateway.handleUpgrade(req,socket,head,local=>{
       const target = new URL(parts[2]==='janus'?'/janus/ws':'/api/media/ws',device.url);target.protocol=target.protocol==='https:'?'wss:':'ws:';

@@ -57,17 +57,20 @@ function openWindow(config, central = false, audioHub=false) {
     show:!audioHub, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, autoplayPolicy:'no-user-gesture-required',backgroundThrottling:false } });
   windows.set(config.id, w); w.roomId = config.id;
   const senderId = w.webContents.id;
-  // Quatro streams por origem: uma porta por janela evita o limite HTTP/1.1
-  // do Chromium bloquear streams quando vários monitores estão em uso.
-  const windowMedia = central ? null : http.createServer(server.listeners('request')[0]);
-  const closeBridge = windowMedia ? attachMediaBridge(windowMedia,{token,owner:config.id,getDevice:device}) : ()=>{};
-  w.mediaReady = windowMedia ? new Promise(resolve => windowMedia.listen(0,'127.0.0.1',()=>{w.mediaBase=`http://127.0.0.1:${windowMedia.address().port}/${token}/stream/`;resolve();})) : Promise.resolve();
+  // Até cinco transmissões por porta para evitar o limite de conexões HTTP/1.1.
+  const mediaListeners=Array.from({length:central?0:audioHub?1:2},()=>{
+    const listener=http.createServer(server.listeners('request')[0]);
+    const closeBridge=attachMediaBridge(listener,{token,owner:config.id,getDevice:device});
+    const ready=new Promise(resolve=>listener.listen(0,'127.0.0.1',()=>resolve(`http://127.0.0.1:${listener.address().port}/${token}/stream/`)));
+    return {ready,close:()=>{closeBridge();listener.close();}};
+  });
+  w.mediaReady=Promise.all(mediaListeners.map(({ready})=>ready)).then(bases=>{w.mediaBases=bases;});
   w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   w.webContents.on('will-navigate', e => e.preventDefault());
   w.loadFile(path.join(__dirname, audioHub?'../ui/audio.html':'../ui/index.html'), { query: { window: config.id, central: central ? '1' : '0' } });
   let microphoneShortcutHeld=false;
   w.on('blur', () => {microphoneShortcutHeld=false;release(w.webContents.id);});
-  w.on('closed', () => { subscribers.delete(senderId); release(senderId); clearMedia(config.id); closeBridge(); windowMedia?.close(); windows.delete(config.id); syncConnections();if(!audioHub&&[...windows.keys()].every(id=>id==='audio-hub'))app.quit(); });
+  w.on('closed', () => { subscribers.delete(senderId); release(senderId); clearMedia(config.id); for(const media of mediaListeners)media.close(); windows.delete(config.id); syncConnections();if(!audioHub&&[...windows.keys()].every(id=>id==='audio-hub'))app.quit(); });
   w.webContents.on('before-input-event', (event, input) => {
     if((input.code==='KeyM'||input.key?.toLowerCase()==='m')&&(microphoneShortcutHeld||(input.type==='keyDown'&&input.control&&input.shift&&!input.alt&&!input.meta))){
       event.preventDefault();
@@ -89,7 +92,7 @@ function checkedSender(event) {
 }
 function handle(name, fn) { ipcMain.handle(name, async (event, ...args) => { checkedSender(event); try { return { ok: true, data: await fn(event, ...args) }; } catch (error) { return { ok: false, error: error.message }; } }); }
 function register() {
-  handle('boot', async e => { const w=BrowserWindow.fromWebContents(e.sender);await w.mediaReady;return { ...publicState(), displays: displays(), mediaBase:w.mediaBase || mediaBase, fullscreen:w.isFullScreen() }; });
+  handle('boot', async e => { const w=BrowserWindow.fromWebContents(e.sender);await w.mediaReady;return { ...publicState(), displays: displays(), mediaBase:w.mediaBases[0] || mediaBase, mediaBases:w.mediaBases, fullscreen:w.isFullScreen() }; });
   handle('save-device', (_e, data) => {
     const old = state.devices.find(d => d.id === data.id);
     const d = { ...old, id: old?.id || randomUUID(), name: String(data.name || 'PiKVM').slice(0, 80), url: model.origin(String(data.url)), username: String(data.username || 'admin'), insecure: !!data.insecure,connectionRevision:(old?.connectionRevision||0)+1 };
@@ -119,6 +122,11 @@ function register() {
     if(!Number.isInteger(settings.volume)||settings.volume<0||settings.volume>100)throw new Error('Volume inválido.');
     Object.assign(d,{transport:settings.transport,audioEnabled:!!settings.audioEnabled,micEnabled:!!settings.micEnabled,volume:settings.volume});changed();
   });
+  handle('scroll-speed',(_e,id,speed)=>{
+    const d=state.devices.find(d=>d.id===id);
+    if(!d||!Number.isInteger(speed)||speed<1||speed>10)throw Error('Escolha uma velocidade de rolagem entre 1 e 10.');
+    d.scrollSpeed=speed;changed();
+  });
   handle('microphone-muted',(_e,id,muted)=>{const d=state.devices.find(d=>d.id===id);if(!d||typeof muted!=='boolean')throw new Error('Microfone inválido.');d.micEnabled=!muted;changed();});
   handle('transcription-settings',(_e,settings)=>{if(transcription.running||transcription.installing||transcription.meetings.size)throw Error('Encerre as reuniões e aguarde o processamento para alterar o motor.');if(!['cpu','cuda'].includes(settings.acceleration)||!['tiny','base','small'].includes(settings.model)||!['pt','en','es','auto'].includes(settings.language))throw Error('Configuração inválida.');transcription.stopEngine();state.transcription={acceleration:settings.acceleration,model:settings.model,language:settings.language};changed();return transcription.snapshot();});
   handle('transcription-install',()=>transcription.install());
@@ -142,9 +150,16 @@ function register() {
   handle('api', (_e, id, method, route, body) => { if (!allowed(method, route)) throw new Error('Comando não permitido.'); return request(device(id), route, { method, body }); });
   handle('test-device', (_e, id) => request(device(id), '/api/info'));
   handle('release', e => release(e.sender.id));
+  handle('focus-hover-window',e=>{
+    const candidate=BrowserWindow.fromWebContents(e.sender), focused=BrowserWindow.getFocusedWindow();
+    const isWorkspace=w=>w&&state.windows.some(config=>config.id===w.roomId);
+    if(!isWorkspace(focused)||!isWorkspace(candidate)||candidate===focused||!candidate.isVisible()||candidate.isMinimized())return;
+    const {x,y}=screen.getCursorScreenPoint(),b=candidate.getContentBounds();
+    if(x>=b.x&&x<b.x+b.width&&y>=b.y&&y<b.y+b.height)candidate.focus();
+  });
   ipcMain.on('audio-status',(e,report)=>{checkedSender(e);if(BrowserWindow.fromWebContents(e.sender).roomId!=='audio-hub')return;audioReports.set(report.id,report);broadcast('audio-state',report);});
   ipcMain.on('audio-level',(e,report)=>{checkedSender(e);if(BrowserWindow.fromWebContents(e.sender).roomId!=='audio-hub')return;audioLevels.set(report.id,report);broadcast('audio-level',report);});
-  ipcMain.on('media-status',(e,report)=>{checkedSender(e);const owner=BrowserWindow.fromWebContents(e.sender).roomId;if(!state.devices.some(d=>d.id===report.id)||![0,1,2,3].includes(report.slot))return;const data={...report,owner};mediaReports.set(`${owner}:${report.slot}`,data);broadcast('media-status',data);});
+  ipcMain.on('media-status',(e,report)=>{checkedSender(e);const owner=BrowserWindow.fromWebContents(e.sender).roomId;if(!state.devices.some(d=>d.id===report.id)||!model.isSlot(report.slot))return;const data={...report,owner};mediaReports.set(`${owner}:${report.slot}`,data);broadcast('media-status',data);});
   ipcMain.on('clear-streams', e => { checkedSender(e); clearMedia(BrowserWindow.fromWebContents(e.sender).roomId); });
   ipcMain.on('hid', (e, id, type, data) => {
     checkedSender(e);
@@ -152,9 +167,11 @@ function register() {
     try{encodeHid(type,data);}catch(error){e.sender.send('hid-error',error.message);return;}
     if (type === 'key' || type === 'mouse_button') {
       const key = type === 'key' ? data.key : data.button; if (typeof key !== 'string' || key.length > 40) return;
-      if (!held.has(e.sender.id)) held.set(e.sender.id, new Map());
-      const map = held.get(e.sender.id), k = `${id}:${type}:${key}`;
-      if (data.state) map.set(k, { id, type, key }); else map.delete(k);
+      const k = `${id}:${type}:${key}`;
+      if(data.state){
+        if(!held.has(e.sender.id))held.set(e.sender.id,new Map());
+        held.get(e.sender.id).set(k,{id,type,key});
+      }else if(!held.get(e.sender.id)?.delete(k))return;
     }
     try { if(!connections.get(id)?.send(type, data))e.sender.send('hid-error','HID sem conexão. Aguarde a reconexão.'); }
     catch(error){e.sender.send('hid-error',error.message);}
@@ -195,7 +212,7 @@ async function mediaServer() {
     if (req.method !== 'GET' || parts[1] !== token || parts[2] !== 'stream' || (req.headers.origin && req.headers.origin !== 'null')) { res.writeHead(403).end(); return; }
     let d; try { d = device(parts[3]); } catch { res.writeHead(404).end(); return; }
     const owner = url.searchParams.get('owner'), slot = url.searchParams.get('slot');
-    if (!windows.has(owner) || !['0','1','2','3'].includes(slot)) { res.writeHead(403).end(); return; }
+    if (!windows.has(owner) || (!/^\d$/.test(slot??'') || !model.isSlot(Number(slot)))) { res.writeHead(403).end(); return; }
     const mediaKey = `${owner}:${slot}`;
     const previous = mediaRequests.get(mediaKey); if (previous) { previous.request.destroy(); previous.response.destroy(); }
     const target = new URL('/streamer/stream', d.url);

@@ -1,5 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
-const calls = ['boot','save-device','delete-device','save-window','select','subscribe','api','test-device','release','fullscreen','new-window','move-window','central','remove-window','snapshot','upload','media-settings','control-selected','microphone-muted','toggle-microphones','transcription-settings','transcription-install','captions-enabled','meeting-start','meeting-stop','meeting-list','meeting-folder','meeting-review'];
+const calls = ['boot','save-device','delete-device','save-window','select','subscribe','api','test-device','release','fullscreen','new-window','move-window','central','remove-window','snapshot','upload','media-settings','scroll-speed','control-selected','focus-hover-window','microphone-muted','toggle-microphones','transcription-settings','transcription-install','captions-enabled','meeting-start','meeting-stop','meeting-list','meeting-folder','meeting-review'];
 contextBridge.exposeInMainWorld('room', {
   call: async (name, ...args) => { if (!calls.includes(name)) throw new Error('Operação inválida.'); const result = await ipcRenderer.invoke(name, ...args); if (!result.ok) throw new Error(result.error); return result.data; },
   hid: (id, type, event) => ipcRenderer.send('hid', id, type, event),

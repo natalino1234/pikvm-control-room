@@ -4,7 +4,7 @@ Aplicativo desktop de código aberto para Windows que reúne vários PiKVMs em j
 
 ## Recursos
 
-- Janelas independentes por monitor, layouts de 1, 2 ou 4 áreas e abas por janela.
+- Janelas independentes por monitor, layouts de 1, 2, 4 ou 9 áreas e abas por janela.
 - Vídeo WebRTC/H.264, H.264 direto e MJPEG, com reconexão automática.
 - Controle de teclado e mouse ao entrar no quadrante. F10 libera o controle; F11 alterna a tela cheia.
 - Tela cheia com barra retrátil no topo para acessar abas, monitores e a central.
@@ -14,6 +14,12 @@ Aplicativo desktop de código aberto para Windows que reúne vários PiKVMs em j
 - Controles ATX, mídia virtual, GPIO e PiKVM Switch, quando disponíveis no equipamento.
 
 O aplicativo integra diretamente a API do PiKVM e não incorpora uma página de controle completa em cada área.
+
+## Download
+
+[Baixar PiKVM Control Room 0.4.4 para Windows x64](https://github.com/natalino1234/pikvm-control-room/releases/download/v0.4.4/PiKVM-Control-Room-0.4.4.exe) · [Versões publicadas](https://github.com/natalino1234/pikvm-control-room/releases)
+
+Extraia o código apenas se precisar compilar. O executável portátil pode ser aberto diretamente.
 
 ## Requisitos
 
@@ -44,12 +50,14 @@ O executável é criado em `dist/` e não exige Node.js no computador de destino
 ## Operação
 
 1. Cadastre os equipamentos e atribua cada um a uma área usando o botão de ajustes do quadrante.
-2. Selecione a divisão de 1, 2 ou 4 áreas. O botão de ampliar mostra somente a área escolhida e permite voltar à divisão.
+2. Selecione a divisão de 1, 2, 4 ou 9 áreas. A opção de 9 organiza três linhas e três colunas; as atribuições ficam salvas quando você alterna o layout. O botão de ampliar mostra somente a área escolhida e permite voltar à divisão.
 3. Use **Nova aba** para organizar outros grupos de equipamentos.
 4. Em **Monitores**, abra outra janela ou mova a janela atual para outro monitor.
 5. A central atua sobre o equipamento selecionado. **Central separada** acompanha a seleção das janelas de vídeo.
-6. Entre com o mouse no vídeo para controlar. Ao sair, teclas e botões são liberados. Após F10, saia e entre novamente ou clique para retomar.
+6. Entre com o mouse no vídeo para direcionar imediatamente o teclado e o mouse àquela transmissão, sem clicar. Ao mudar de área, o equipamento anterior libera suas teclas e botões. Se o PiKVM reconectar com o cursor sobre o vídeo, o controle retorna automaticamente. Após F10, saia e entre novamente ou clique para retomar.
 7. Em tela cheia, aproxime o mouse do topo para acessar a barra retrátil. F10 libera o controle e revela a barra; F11 sai da tela cheia.
+
+Em **Central → Teclado e Mouse → Velocidade da rolagem**, ajuste a rolagem vertical e horizontal de 1 a 10 para o PiKVM selecionado. O ajuste é salvo automaticamente por equipamento; 5 é o padrão. O selo **CONTROLE ATIVO** fica no canto superior direito da transmissão.
 
 O áudio continua nas abas de fundo. Uma sessão por equipamento evita reprodução duplicada quando o mesmo PiKVM aparece em mais de uma área. A borda âmbar indica atividade sonora. O microfone pode ser mutado individualmente na central ou em conjunto com Ctrl+Shift+M.
 
